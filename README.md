@@ -1,12 +1,14 @@
 # LinkedIn Prospect SDR Tool
 
-Aplicacao para prospeccao automatizada no LinkedIn usando Unipile, Supabase e Streamlit. O foco e criar listas de leads, enriquecer dados e organizar campanhas de outreach.
+Aplicacao para prospeccao no LinkedIn usando Unipile, Supabase e Streamlit. O fluxo principal e: criar uma lista via Sales Navigator, salvar, enriquecer e enviar mensagens.
 
-## Para que serve
-- Buscar pessoas no LinkedIn via Sales Navigator.
-- Salvar listas de leads com deduplicacao e score simples por palavras-chave.
-- Enriquecer perfis (contato, experiencia, educacao, sobre).
-- Criar campanhas e registrar tentativas de envio.
+## O que este app faz
+- Busca pessoas no Sales Navigator por URL ou por parametros com IDs oficiais.
+- Pagina resultados com cursor e permite buscar em lote.
+- Salva listas em campanhas, com deduplicacao.
+- Enriquecimento leve (Bio, Cargo, Empresas, Empresa ID, Localizacao).
+- Envio de mensagens por novo chat (attendee_id) ou chat existente (chat_id).
+- Aba de payloads para auditar request/response.
 
 ## Arquitetura
 - Frontend: Streamlit
@@ -15,8 +17,8 @@ Aplicacao para prospeccao automatizada no LinkedIn usando Unipile, Supabase e St
 
 ## Requisitos
 - Python 3.10+
-- Conta Supabase (com Auth habilitado)
-- Conta Unipile com LinkedIn conectado (Sales Navigator)
+- Conta Supabase com Auth habilitado
+- Conta Unipile com LinkedIn conectado (Sales Navigator recomendado)
 
 ## Instalacao
 ```bash
@@ -58,6 +60,11 @@ create table leads (
   full_name text,
   headline text,
   location text,
+  profile_location text,
+  current_title text,
+  companies text,
+  company_id text,
+  bio text,
   status text default 'new',
   enrichment_data jsonb,
   unique(campaign_id, linkedin_public_id)
@@ -78,36 +85,69 @@ create table message_logs (
 streamlit run projeto_linkedin/app.py
 ```
 
-## Como usar
+## Como usar (passo a passo)
 1. Abra o app e informe `Supabase URL` e `Supabase Key`.
 2. Faca login com seu usuario do Supabase Auth.
 3. Cadastre uma conta Unipile (Account ID, API Key, Label).
-4. Use a aba de busca do Sales Navigator:
-   - Cole a URL de busca, ou
-   - Informe os parametros com IDs (REGION, SALES_INDUSTRY, JOB_TITLE, etc).
-5. Selecione leads, salve campanha e opcionalmente faca enriquecimento.
+4. Aba **Lista (Sales Navigator)**:
+   - Modo URL: cole a URL de busca do Sales Navigator.
+   - Modo Parametros: informe IDs (REGION, SALES_INDUSTRY, JOB_TITLE, etc).
+   - Use o expander de parametros para listar IDs.
+   - Use o botao de busca em lote para coletar mais paginas.
+   - Baixe a lista ou salve como campanha.
+5. Aba **Enriquecimento**:
+   - Escolha uma lista existente ou envie um CSV.
+   - O app retorna apenas Bio, Cargo, Empresas, Empresa ID, Localizacao.
+6. Aba **Mensagens**:
+   - Lista existente ou CSV.
+   - Escolha o modo: Novo chat (attendee_id) ou Chat existente (chat_id).
+   - Defina o template e envie com delay entre mensagens.
+7. Aba **Payloads**:
+   - Veja o payload enviado e a resposta recebida.
 
-### Sales Navigator: boas praticas
-- Filtros avancados do Sales Navigator usam IDs. Para evitar erro, cole a URL de busca diretamente.
-- Para buscas simples, use apenas `Palavras-chave` e `Empresa`.
+## Paginacao e limites
+- Sales Navigator tem limite de 100 itens por pagina.
+- O cursor pode expirar; use o checkpoint para retomar no dia seguinte.
+- O LinkedIn aplica limites dinamicos de envio (influencia por conta, rede e tipo de mensagem).
+- Quando estourar limites, a API retorna erros como `errors/limit_exceeded`.
+
+## Checkpoint (retomar no dia seguinte)
+Na aba de lista:
+- Baixe o checkpoint com a lista e o cursor.
+- No dia seguinte, faca upload e clique em "Carregar checkpoint".
+
+## Formato de CSV
+**Enriquecimento (upload):**
+- Colunas aceitas: `public_identifier`, `linkedin_public_id`, `id`, `profile_url`.
+
+**Mensagens (upload):**
+- Novo chat: `provider_id` ou `id`
+- Chat existente: `chat_id`
+
+## Script de paginacao (opcional)
+Arquivo: `linkedin_salesnav_pagination.py`
+
+Variaveis de ambiente:
+- `UNIPILE_TOKEN`
+- `UNIPILE_ACCOUNT_ID`
+- `UNIPILE_BASE_URL` (opcional)
+
+Exemplo:
+```bash
+export UNIPILE_TOKEN="..."
+export UNIPILE_ACCOUNT_ID="..."
+python linkedin_salesnav_pagination.py
+```
 
 ## Seguranca e chaves
 - Nao commite chaves no repositorio.
-- Este repo ignora arquivos `.env`, `secrets.toml`, `json-n8n*.json` e ambientes virtuais.
-- Informe chaves pelo formulario da aplicacao ou guarde localmente.
+- `.env`, `.streamlit/secrets.toml` e `json-n8n*.json` estao ignorados no `.gitignore`.
+- Use variaveis de ambiente ou o formulario do app.
 
-## Estrutura do repo
-```
-.
-- projeto_linkedin/
-  - app.py
-  - unipile_client.py
-  - db_handler.py
-  - documentacao_api/
-- requirements.txt
-- README.md
-```
+## Problemas comuns
+- **"Apenas perfis inacessiveis encontrados"**: confira o payload enviado na aba Payloads e valide os parametros.
+- **Sem cursor**: tente usar URL do Sales Navigator ou revise filtros.
+- **Mensagem nao enviada**: verifique se o attendee_id ou chat_id esta presente e se a conta tem permissao.
 
-## Observacoes
-- Use a API Unipile e o LinkedIn de acordo com os termos de uso.
-- Se o Sales Navigator retornar vazio, confirme o payload e use URL de busca.
+## Observacoes legais
+Use a API Unipile e o LinkedIn de acordo com os termos de uso. Evite automacoes agressivas.
