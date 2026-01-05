@@ -3,7 +3,7 @@
 Aplicacao para prospeccao automatizada no LinkedIn usando Unipile, Supabase e Streamlit. O foco e criar listas de leads, enriquecer dados e organizar campanhas de outreach.
 
 ## Para que serve
-- Buscar pessoas no LinkedIn (Classic) e no Sales Navigator.
+- Buscar pessoas no LinkedIn via Sales Navigator.
 - Salvar listas de leads com deduplicacao e score simples por palavras-chave.
 - Enriquecer perfis (contato, experiencia, educacao, sobre).
 - Criar campanhas e registrar tentativas de envio.
@@ -16,7 +16,7 @@ Aplicacao para prospeccao automatizada no LinkedIn usando Unipile, Supabase e St
 ## Requisitos
 - Python 3.10+
 - Conta Supabase (com Auth habilitado)
-- Conta Unipile com LinkedIn conectado (Classic e/ou Sales Navigator)
+- Conta Unipile com LinkedIn conectado (Sales Navigator)
 
 ## Instalacao
 ```bash
@@ -78,44 +78,13 @@ create table message_logs (
 streamlit run projeto_linkedin/app.py
 ```
 
-## Integracao com Chatwoot (LinkedIn -> Chatwoot)
-Este projeto inclui um bridge simples para receber webhooks da Unipile e criar contatos, conversas e mensagens no Chatwoot.
-
-### Variaveis de ambiente
-```bash
-export CHATWOOT_URL="https://seu-chatwoot.exemplo.com"
-export CHATWOOT_ACCOUNT_ID="1"
-export CHATWOOT_INBOX_ID="98"
-export CHATWOOT_API_TOKEN="seu_token"
-# opcional: protege o webhook com um header simples
-export UNIPILE_WEBHOOK_SECRET="seu_segredo"
-```
-
-### Rodar o bridge
-```bash
-uvicorn projeto_linkedin.chatwoot_bridge:app --host 0.0.0.0 --port 8001
-```
-
-### Configurar webhook na Unipile
-Aponte o webhook de mensagens recebidas para:
-```
-https://seu-dominio/webhooks/unipile
-```
-Se estiver usando `UNIPILE_WEBHOOK_SECRET`, envie o header `X-Webhook-Secret` com o mesmo valor.
-
-### O que o bridge faz
-- Cria/acha contato pelo `identifier` (LinkedIn provider id).
-- Cria conversa usando `source_id` do chat (idempotente por chat).
-- Envia a mensagem para o Chatwoot como `incoming`.
-- Guarda o mapeamento em `data/chatwoot_bridge.db` (arquivo local ignorado no git).
-
 ## Como usar
 1. Abra o app e informe `Supabase URL` e `Supabase Key`.
 2. Faca login com seu usuario do Supabase Auth.
 3. Cadastre uma conta Unipile (Account ID, API Key, Label).
-4. Use a aba de busca:
-   - Classic: permite filtros simples (cargo, palavras-chave, local, empresa).
-   - Sales Navigator: use palavras-chave e empresa por nome ou cole a URL do Sales Navigator.
+4. Use a aba de busca do Sales Navigator:
+   - Cole a URL de busca, ou
+   - Informe os parametros com IDs (REGION, SALES_INDUSTRY, JOB_TITLE, etc).
 5. Selecione leads, salve campanha e opcionalmente faca enriquecimento.
 
 ### Sales Navigator: boas praticas

@@ -55,6 +55,9 @@ class DBHandler:
         }
         return self.supabase.table("campaigns").insert(data).execute()
 
+    def update_campaign_template(self, campaign_id: str, template: str):
+        return self.supabase.table("campaigns").update({"message_template": template}).eq("id", campaign_id).execute()
+
     def save_leads(self, campaign_id: str, leads_list: List[Dict]):
         formatted_leads = []
         for lead in leads_list:

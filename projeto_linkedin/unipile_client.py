@@ -10,6 +10,7 @@ class UnipileClient:
     def __init__(self, base_url: str, api_key: str):
         self.base_url = base_url.rstrip('/')
         self.api_key = api_key
+        self.last_status = None
         self.headers = {
             "accept": "application/json",
             "content-type": "application/json",
@@ -21,6 +22,7 @@ class UnipileClient:
         for attempt in range(max_retries):
             try:
                 response = requests.request(method, url, headers=self.headers, params=params, json=json_data, timeout=30)
+                self.last_status = response.status_code
                 
                 if response.status_code == 429:
                     wait_time = (2 ** attempt) + 5
@@ -47,18 +49,11 @@ class UnipileClient:
             limit = 100
 
         safe_criteria = criteria or {}
-        if api_type == "sales_navigator":
-            payload = {
-                "api": api_type,
-                "category": "people",
-                **safe_criteria,
-            }
-        else:
-            payload = {
-                "api": api_type,
-                "category": "people",
-                "params": safe_criteria,
-            }
+        payload = {
+            "api": api_type,
+            "category": "people",
+            **safe_criteria,
+        }
 
         query_params = {"account_id": account_id, "limit": limit}
         if cursor:
@@ -92,6 +87,27 @@ class UnipileClient:
             raise last_error
         return None
 
+    def list_search_parameters(
+        self,
+        account_id: str,
+        parameter_type: str,
+        service: str | None = None,
+        keywords: str | None = None,
+        limit: int = 50,
+    ):
+        """Lista parametros de busca (ex: SAVED_SEARCHES) para obter IDs."""
+        endpoint = "/api/v1/linkedin/search/parameters"
+        params: dict[str, object] = {
+            "account_id": account_id,
+            "type": parameter_type,
+            "limit": max(1, min(limit, 100)),
+        }
+        if service:
+            params["service"] = service
+        if keywords:
+            params["keywords"] = keywords
+        return self._request("GET", endpoint, params=params)
+
     def get_profile_details(self, account_id: str, identifier: str, sections: Union[List[str], str, None] = None):
         """Busca dados completos do perfil (Enriquecimento)."""
         # Pede seções estratégicas para não pesar tanto mas trazer contatos
@@ -117,8 +133,53 @@ class UnipileClient:
         params = {"account_id": account_id, "limit": limit}
         return self._request("GET", endpoint, params=params)
 
-    def start_chat(self, account_id: str, attendees_ids: List[str], text: str, subject: str = None):
+    def start_chat(
+        self,
+        account_id: str,
+        attendees_ids: List[str],
+        text: str,
+        subject: str = None,
+        linkedin_api: str | None = "sales_navigator",
+        linkedin_inmail: bool | None = None,
+    ):
         endpoint = "/api/v1/chats"
-        payload = {"account_id": account_id, "attendees_ids": attendees_ids, "text": text}
-        if subject: payload["subject"] = subject
-        return self._request("POST", endpoint, json_data=payload)
+        url = f"{self.base_url}{endpoint}"
+        headers = {
+            "accept": "application/json",
+            "X-API-KEY": self.api_key,
+        }
+        data: list[tuple[str, str]] = [
+            ("account_id", account_id),
+            ("text", text),
+        ]
+        for attendee_id in attendees_ids:
+            data.append(("attendees_ids", attendee_id))
+        if subject:
+            data.append(("subject", subject))
+        if linkedin_api:
+            data.append(("linkedin[api]", linkedin_api))
+        if linkedin_inmail is not None:
+            data.append(("linkedin[inmail]", "true" if linkedin_inmail else "false"))
+        response = requests.post(url, headers=headers, data=data, timeout=30)
+        self.last_status = response.status_code
+        if 200 <= response.status_code < 300:
+            return response.json()
+        response.raise_for_status()
+        return None
+
+    def send_message_in_chat(self, chat_id: str, text: str, account_id: str | None = None):
+        endpoint = f"/api/v1/chats/{chat_id}/messages"
+        url = f"{self.base_url}{endpoint}"
+        headers = {
+            "accept": "application/json",
+            "X-API-KEY": self.api_key,
+        }
+        data: list[tuple[str, str]] = [("text", text)]
+        if account_id:
+            data.append(("account_id", account_id))
+        response = requests.post(url, headers=headers, data=data, timeout=30)
+        self.last_status = response.status_code
+        if 200 <= response.status_code < 300:
+            return response.json()
+        response.raise_for_status()
+        return None
