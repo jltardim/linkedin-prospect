@@ -6,7 +6,7 @@ Aplicacao para prospeccao no LinkedIn usando Unipile, Supabase e Streamlit. O fl
 - Busca pessoas no Sales Navigator por URL ou por parametros com IDs oficiais.
 - Pagina resultados com cursor e permite buscar em lote.
 - Salva listas em campanhas, com deduplicacao.
-- Enriquecimento leve (Bio, Cargo, Empresas, Empresa ID, Localizacao).
+- Enriquecimento leve (Bio, Cargo, Empresas, Empresa ID, Localizacao, Emails, Phones, Adresses, Socials).
 - Envio de mensagens por novo chat (attendee_id) ou chat existente (chat_id).
 - Aba de payloads para auditar request/response.
 
@@ -65,6 +65,10 @@ create table leads (
   companies text,
   company_id text,
   bio text,
+  emails text,
+  phones text,
+  adresses text,
+  socials text,
   invitation_status text,
   invitation_id text,
   invited_at timestamp with time zone,
@@ -73,6 +77,31 @@ create table leads (
   enrichment_data jsonb,
   unique(campaign_id, linkedin_public_id)
 );
+
+create table invite_schedules (
+  id uuid default uuid_generate_v4() primary key,
+  user_id uuid references auth.users not null,
+  campaign_id uuid references campaigns(id) on delete cascade,
+  lead_id uuid references leads(id) on delete cascade,
+  provider_id text not null,
+  user_email text,
+  full_name text,
+  scheduled_date date not null,
+  status text default 'scheduled',
+  message text,
+  invitation_id text,
+  error_message text,
+  source text default 'campaign',
+  batch_id uuid,
+  batch_label text,
+  metadata jsonb,
+  created_at timestamp with time zone default timezone('utc'::text, now()) not null,
+  sent_at timestamp with time zone
+);
+
+create index invite_schedules_user_date_idx on invite_schedules(user_id, scheduled_date);
+create index invite_schedules_campaign_idx on invite_schedules(campaign_id);
+create unique index invite_schedules_unique_idx on invite_schedules(user_id, provider_id, scheduled_date);
 
 create table message_logs (
   id uuid default uuid_generate_v4() primary key,
@@ -101,13 +130,16 @@ streamlit run projeto_linkedin/app.py
    - Baixe a lista ou salve como campanha.
 5. Aba **Enriquecimento**:
    - Escolha uma lista existente ou envie um CSV.
-   - O app retorna apenas Bio, Cargo, Empresas, Empresa ID, Localizacao.
-6. Aba **Mensagens**:
+   - O app retorna Bio, Cargo, Empresas, Empresa ID, Localizacao, Emails, Phones, Adresses, Socials.
+6. Aba **Convites**:
    - Lista existente ou CSV.
-   - Envie convites de amizade antes das mensagens (recomendado).
+   - Configure agendamento com limite de 50 convites/dia.
+   - Defina mensagem opcional (max 300) e envie os convites do dia.
+7. Aba **Mensagens**:
+   - Lista existente ou CSV.
    - Escolha o modo: Novo chat (attendee_id) ou Chat existente (chat_id).
    - Defina o template e envie com delay entre mensagens.
-7. Aba **Payloads**:
+8. Aba **Payloads**:
    - Veja o payload enviado e a resposta recebida.
 
 ## Paginacao e limites
@@ -128,6 +160,10 @@ Na aba de lista:
 **Mensagens (upload):**
 - Novo chat: `provider_id` ou `id`
 - Chat existente: `chat_id`
+
+**Convites (upload):**
+- `provider_id` ou `id`
+- opcional: `user_email`
 
 ## Script de paginacao (opcional)
 Arquivo: `linkedin_salesnav_pagination.py`

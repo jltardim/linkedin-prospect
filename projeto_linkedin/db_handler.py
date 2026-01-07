@@ -75,6 +75,10 @@ class DBHandler:
                 "companies": lead.get("companies"),
                 "company_id": lead.get("company_id"),
                 "bio": lead.get("bio"),
+                "emails": lead.get("emails"),
+                "phones": lead.get("phones"),
+                "adresses": lead.get("adresses"),
+                "socials": lead.get("socials"),
                 "status": "new",
                 "enrichment_data": lead.get("enrichment_data", None) 
             })
@@ -111,6 +115,54 @@ class DBHandler:
         if status == "sent":
             data["invited_at"] = datetime.utcnow().isoformat()
         return self.supabase.table("leads").update(data).eq("id", lead_id).execute()
+
+    def create_invite_schedule_rows(self, rows: List[Dict[str, Any]]):
+        if not rows:
+            return None
+        return self.supabase.table("invite_schedules").upsert(
+            rows,
+            on_conflict="user_id,provider_id,scheduled_date",
+        ).execute()
+
+    def get_invite_schedule(
+        self,
+        campaign_id: str | None = None,
+        source: str | None = None,
+        batch_id: str | None = None,
+        status: str | None = None,
+        scheduled_date: str | None = None,
+    ):
+        query = self.supabase.table("invite_schedules").select("*").eq("user_id", self.user.id)
+        if campaign_id:
+            query = query.eq("campaign_id", campaign_id)
+        if source:
+            query = query.eq("source", source)
+        if batch_id:
+            query = query.eq("batch_id", batch_id)
+        if status:
+            query = query.eq("status", status)
+        if scheduled_date:
+            query = query.eq("scheduled_date", scheduled_date)
+        return query.order("scheduled_date", desc=False).execute().data
+
+    def update_invite_schedule(
+        self,
+        schedule_id: str,
+        status: str,
+        invitation_id: str | None = None,
+        error_msg: str | None = None,
+    ):
+        data: Dict[str, Any] = {"status": status}
+        if invitation_id:
+            data["invitation_id"] = invitation_id
+        if error_msg is not None:
+            data["error_message"] = error_msg
+        if status == "sent":
+            data["sent_at"] = datetime.utcnow().isoformat()
+        return self.supabase.table("invite_schedules").update(data).eq("id", schedule_id).execute()
+
+    def delete_invite_schedule_batch(self, batch_id: str):
+        return self.supabase.table("invite_schedules").delete().eq("batch_id", batch_id).execute()
 
     def log_attempt(self, campaign_id: str, lead_id: str, status: str, error_msg: str = None):
         data = {
