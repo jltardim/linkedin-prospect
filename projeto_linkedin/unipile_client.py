@@ -183,3 +183,21 @@ class UnipileClient:
             return response.json()
         response.raise_for_status()
         return None
+
+    def send_invitation(
+        self,
+        account_id: str,
+        provider_id: str,
+        message: str | None = None,
+        user_email: str | None = None,
+    ):
+        endpoint = "/api/v1/users/invite"
+        payload: dict[str, str] = {
+            "account_id": account_id,
+            "provider_id": provider_id,
+        }
+        if message:
+            payload["message"] = message
+        if user_email:
+            payload["user_email"] = user_email
+        return self._request("POST", endpoint, json_data=payload)

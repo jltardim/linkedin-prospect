@@ -65,6 +65,10 @@ create table leads (
   companies text,
   company_id text,
   bio text,
+  invitation_status text,
+  invitation_id text,
+  invited_at timestamp with time zone,
+  invitation_error text,
   status text default 'new',
   enrichment_data jsonb,
   unique(campaign_id, linkedin_public_id)
@@ -100,6 +104,7 @@ streamlit run projeto_linkedin/app.py
    - O app retorna apenas Bio, Cargo, Empresas, Empresa ID, Localizacao.
 6. Aba **Mensagens**:
    - Lista existente ou CSV.
+   - Envie convites de amizade antes das mensagens (recomendado).
    - Escolha o modo: Novo chat (attendee_id) ou Chat existente (chat_id).
    - Defina o template e envie com delay entre mensagens.
 7. Aba **Payloads**:
@@ -148,6 +153,7 @@ python linkedin_salesnav_pagination.py
 - **"Apenas perfis inacessiveis encontrados"**: confira o payload enviado na aba Payloads e valide os parametros.
 - **Sem cursor**: tente usar URL do Sales Navigator ou revise filtros.
 - **Mensagem nao enviada**: verifique se o attendee_id ou chat_id esta presente e se a conta tem permissao.
+- **Convite nao enviado**: confirme provider_id e limites do LinkedIn; mensagens de convite tem limite de 300 caracteres.
 
 ## Observacoes legais
 Use a API Unipile e o LinkedIn de acordo com os termos de uso. Evite automacoes agressivas.

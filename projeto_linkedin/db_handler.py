@@ -1,5 +1,6 @@
 from supabase import create_client, Client
 import streamlit as st
+from datetime import datetime
 from typing import List, Dict, Optional, Any
 
 class DBHandler:
@@ -94,6 +95,22 @@ class DBHandler:
 
     def update_lead_status(self, lead_id: str, status: str):
         self.supabase.table("leads").update({"status": status}).eq("id", lead_id).execute()
+
+    def update_lead_invitation(
+        self,
+        lead_id: str,
+        status: str,
+        invitation_id: str | None = None,
+        error_msg: str | None = None,
+    ):
+        data: Dict[str, Any] = {"invitation_status": status}
+        if invitation_id:
+            data["invitation_id"] = invitation_id
+        if error_msg is not None:
+            data["invitation_error"] = error_msg
+        if status == "sent":
+            data["invited_at"] = datetime.utcnow().isoformat()
+        return self.supabase.table("leads").update(data).eq("id", lead_id).execute()
 
     def log_attempt(self, campaign_id: str, lead_id: str, status: str, error_msg: str = None):
         data = {

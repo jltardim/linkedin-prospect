@@ -295,6 +295,13 @@ def resolve_profile_identifier(row: dict) -> str | None:
     profile_url = row.get("profile_url") or row.get("public_profile_url")
     return public_identifier_from_url(profile_url) if profile_url else None
 
+def resolve_invitation_email(row: dict) -> str | None:
+    for key in ("email", "user_email", "email_address"):
+        value = row.get(key)
+        if value:
+            return str(value)
+    return None
+
 def strip_page_param(search_url: str) -> str:
     if not search_url:
         return search_url
@@ -1496,6 +1503,8 @@ with tab3:
                                 "localizacao",
                                 "current_title",
                                 "companies",
+                                "invitation_status",
+                                "invited_at",
                                 "status",
                             ]
                             df_show = df[[c for c in cols if c in df.columns]]
@@ -1506,6 +1515,8 @@ with tab3:
                                 "localizacao": st.column_config.TextColumn("Localização"),
                                 "current_title": st.column_config.TextColumn("Cargo"),
                                 "companies": st.column_config.TextColumn("Empresas"),
+                                "invitation_status": st.column_config.TextColumn("Convite"),
+                                "invited_at": st.column_config.TextColumn("Convidado em"),
                                 "status": st.column_config.TextColumn("Status"),
                             }
                             edited = st.data_editor(
@@ -1521,6 +1532,103 @@ with tab3:
                             selected_leads = leads
 
                         st.caption(f"Total selecionado: {len(selected_leads)}")
+
+                        st.markdown("#### 🤝 Convites de amizade")
+                        st.caption("Envie convites antes das mensagens. Recomenda-se aguardar alguns dias para aceitarem.")
+                        invite_message = st.text_area(
+                            "Mensagem do convite (opcional, max 300)",
+                            value="",
+                            height=80,
+                            key=f"invite_message_{curr['id']}",
+                        )
+                        invite_limit = st.number_input(
+                            "Limite diario de convites",
+                            min_value=10,
+                            max_value=500,
+                            value=100,
+                            step=10,
+                            key=f"invite_daily_limit_{curr['id']}",
+                        )
+                        invite_delay = st.number_input(
+                            "Delay entre convites (s)",
+                            min_value=0.0,
+                            max_value=10.0,
+                            value=1.5,
+                            step=0.5,
+                            key=f"invite_delay_{curr['id']}",
+                        )
+                        skip_invited = st.checkbox(
+                            "Ignorar ja convidados",
+                            value=True,
+                            key=f"invite_skip_{curr['id']}",
+                        )
+                        if st.button("🤝 Enviar convites", key=f"btn_send_invites_{curr['id']}"):
+                            if invite_message and len(invite_message) > 300:
+                                st.error("A mensagem do convite excede 300 caracteres.")
+                            elif not selected_leads:
+                                st.error("Selecione pelo menos um lead.")
+                            else:
+                                schema_warned = False
+                                ok = fail = skipped = 0
+                                bar = st.progress(0)
+                                status = st.empty()
+                                leads_to_invite = selected_leads
+                                if skip_invited:
+                                    leads_to_invite = [
+                                        lead for lead in selected_leads
+                                        if not lead.get("invitation_status")
+                                        and not lead.get("invited_at")
+                                    ]
+                                leads_to_invite = leads_to_invite[: int(invite_limit)]
+                                for i, lead in enumerate(leads_to_invite):
+                                    provider_id = lead.get("provider_id") or lead.get("id")
+                                    if not provider_id:
+                                        skipped += 1
+                                        db.log_attempt(curr["id"], lead["id"], "invite_skipped", "provider_id ausente")
+                                        continue
+                                    email = resolve_invitation_email(lead)
+                                    try:
+                                        log_request(
+                                            "send_invitation",
+                                            {
+                                                "endpoint": "/api/v1/users/invite",
+                                                "body": {
+                                                    "account_id": acc_id,
+                                                    "provider_id": provider_id,
+                                                    "message": invite_message or None,
+                                                    "user_email": email,
+                                                },
+                                            },
+                                        )
+                                        res = unipile.send_invitation(
+                                            acc_id,
+                                            provider_id,
+                                            message=invite_message or None,
+                                            user_email=email,
+                                        )
+                                        log_response("send_invitation", res, unipile.last_status)
+                                        invitation_id = res.get("invitation_id") if isinstance(res, dict) else None
+                                        try:
+                                            db.update_lead_invitation(lead["id"], "sent", invitation_id=invitation_id)
+                                        except Exception as e:
+                                            if not schema_warned:
+                                                st.warning("Atualize a tabela leads com campos de convite (invitation_status, invited_at, invitation_id).")
+                                                schema_warned = True
+                                            db.log_attempt(curr["id"], lead["id"], "invite_error", str(e))
+                                        db.log_attempt(curr["id"], lead["id"], "invite_sent")
+                                        ok += 1
+                                    except Exception as e:
+                                        try:
+                                            db.update_lead_invitation(lead["id"], "error", error_msg=str(e))
+                                        except Exception:
+                                            pass
+                                        db.log_attempt(curr["id"], lead["id"], "invite_error", str(e))
+                                        fail += 1
+                                    bar.progress((i + 1) / max(len(leads_to_invite), 1))
+                                    status.text(f"Enviando convites... {i + 1}/{len(leads_to_invite)}")
+                                    if invite_delay:
+                                        time.sleep(invite_delay)
+                                st.success(f"Convites enviados: {ok}, Erros: {fail}, Ignorados: {skipped}.")
 
                         send_mode = st.radio(
                             "Modo de envio",
@@ -1721,6 +1829,93 @@ with tab3:
                             selected_rows = [df.iloc[i].to_dict() for i in sel_idx]
 
                         st.caption(f"Total selecionado: {len(selected_rows)}")
+                        st.markdown("#### 🤝 Convites de amizade")
+                        st.caption("Envie convites antes das mensagens. Recomenda-se aguardar alguns dias para aceitarem.")
+                        invite_message = st.text_area(
+                            "Mensagem do convite (opcional, max 300)",
+                            value="",
+                            height=80,
+                            key="invite_message_upload",
+                        )
+                        invite_limit = st.number_input(
+                            "Limite diario de convites",
+                            min_value=10,
+                            max_value=500,
+                            value=100,
+                            step=10,
+                            key="invite_daily_limit_upload",
+                        )
+                        invite_delay = st.number_input(
+                            "Delay entre convites (s)",
+                            min_value=0.0,
+                            max_value=10.0,
+                            value=1.5,
+                            step=0.5,
+                            key="invite_delay_upload",
+                        )
+                        if st.button("🤝 Enviar convites", key="btn_send_invites_upload"):
+                            if invite_message and len(invite_message) > 300:
+                                st.error("A mensagem do convite excede 300 caracteres.")
+                            elif not selected_rows:
+                                st.error("Selecione pelo menos um lead.")
+                            else:
+                                ok = fail = skipped = 0
+                                bar = st.progress(0)
+                                status = st.empty()
+                                report = []
+                                rows_to_invite = selected_rows[: int(invite_limit)]
+                                for i, lead in enumerate(rows_to_invite):
+                                    provider_id = lead.get("provider_id") or lead.get("id")
+                                    row_report = dict(lead)
+                                    if not provider_id:
+                                        skipped += 1
+                                        row_report["_status"] = "invite_skipped"
+                                        row_report["_error"] = "provider_id ausente"
+                                        report.append(row_report)
+                                        continue
+                                    email = resolve_invitation_email(lead)
+                                    try:
+                                        log_request(
+                                            "send_invitation",
+                                            {
+                                                "endpoint": "/api/v1/users/invite",
+                                                "body": {
+                                                    "account_id": acc_id,
+                                                    "provider_id": provider_id,
+                                                    "message": invite_message or None,
+                                                    "user_email": email,
+                                                },
+                                            },
+                                        )
+                                        res = unipile.send_invitation(
+                                            acc_id,
+                                            provider_id,
+                                            message=invite_message or None,
+                                            user_email=email,
+                                        )
+                                        log_response("send_invitation", res, unipile.last_status)
+                                        row_report["_status"] = "invite_sent"
+                                        if isinstance(res, dict):
+                                            row_report["invitation_id"] = res.get("invitation_id")
+                                        ok += 1
+                                    except Exception as e:
+                                        fail += 1
+                                        row_report["_status"] = "invite_error"
+                                        row_report["_error"] = str(e)
+                                    report.append(row_report)
+                                    bar.progress((i + 1) / max(len(rows_to_invite), 1))
+                                    status.text(f"Enviando convites... {i + 1}/{len(rows_to_invite)}")
+                                    if invite_delay:
+                                        time.sleep(invite_delay)
+                                st.success(f"Convites enviados: {ok}, Erros: {fail}, Ignorados: {skipped}.")
+                                report_df = pd.DataFrame(report)
+                                st.download_button(
+                                    "Baixar relatorio de convites",
+                                    data=report_df.to_csv(index=False).encode("utf-8"),
+                                    file_name="relatorio_convites.csv",
+                                    mime="text/csv",
+                                )
+
                         subject = st.text_input("Assunto (opcional)", value="", key="msg_upload_subject")
                         template = st.text_area(
                             "Mensagem",
