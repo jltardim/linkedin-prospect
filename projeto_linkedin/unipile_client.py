@@ -11,6 +11,8 @@ class UnipileClient:
         self.base_url = base_url.rstrip('/')
         self.api_key = api_key
         self.last_status = None
+        self.last_error_status = None
+        self.last_error_response = None
         self.headers = {
             "accept": "application/json",
             "content-type": "application/json",
@@ -23,6 +25,8 @@ class UnipileClient:
             try:
                 response = requests.request(method, url, headers=self.headers, params=params, json=json_data, timeout=30)
                 self.last_status = response.status_code
+                self.last_error_status = None
+                self.last_error_response = None
                 
                 if response.status_code == 429:
                     wait_time = (2 ** attempt) + 5
@@ -32,7 +36,11 @@ class UnipileClient:
                 
                 if 200 <= response.status_code < 300:
                     return response.json()
-                
+                try:
+                    self.last_error_response = response.json()
+                except ValueError:
+                    self.last_error_response = {"raw": response.text}
+                self.last_error_status = response.status_code
                 response.raise_for_status()
             except Exception as e:
                 if attempt == max_retries - 1: raise e
@@ -162,8 +170,15 @@ class UnipileClient:
             data.append(("linkedin[inmail]", "true" if linkedin_inmail else "false"))
         response = requests.post(url, headers=headers, data=data, timeout=30)
         self.last_status = response.status_code
+        self.last_error_status = None
+        self.last_error_response = None
         if 200 <= response.status_code < 300:
             return response.json()
+        try:
+            self.last_error_response = response.json()
+        except ValueError:
+            self.last_error_response = {"raw": response.text}
+        self.last_error_status = response.status_code
         response.raise_for_status()
         return None
 
@@ -179,8 +194,15 @@ class UnipileClient:
             data.append(("account_id", account_id))
         response = requests.post(url, headers=headers, data=data, timeout=30)
         self.last_status = response.status_code
+        self.last_error_status = None
+        self.last_error_response = None
         if 200 <= response.status_code < 300:
             return response.json()
+        try:
+            self.last_error_response = response.json()
+        except ValueError:
+            self.last_error_response = {"raw": response.text}
+        self.last_error_status = response.status_code
         response.raise_for_status()
         return None
 

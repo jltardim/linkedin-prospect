@@ -1,14 +1,43 @@
 # LinkedIn Prospect SDR Tool
 
-Aplicacao para prospeccao no LinkedIn usando Unipile, Supabase e Streamlit. O fluxo principal e: criar uma lista via Sales Navigator, salvar, enriquecer e enviar mensagens.
+Aplicacao para prospeccao no LinkedIn usando Unipile, Supabase e Streamlit. O fluxo principal e: criar uma lista via Sales Navigator, salvar, enriquecer, convidar e enviar mensagens.
 
 ## O que este app faz
-- Busca pessoas no Sales Navigator por URL ou por parametros com IDs oficiais.
+- Busca pessoas no Sales Navigator por parametros com IDs oficiais.
+- Extrai parametros de uma URL do Sales Navigator para preencher os campos de busca.
 - Pagina resultados com cursor e permite buscar em lote.
 - Salva listas em campanhas, com deduplicacao.
 - Enriquecimento leve (Bio, Cargo, Empresas, Empresa ID, Localizacao, Emails, Phones, Adresses, Socials).
+- Envio de convites com agendamento e limite diario.
 - Envio de mensagens por novo chat (attendee_id) ou chat existente (chat_id).
 - Aba de payloads para auditar request/response.
+
+## Estrategia completa de prospeccao (recomendada)
+1. Defina o ICP e filtros do Sales Navigator.
+2. Cole a URL do Sales Navigator e extraia os parametros (apenas para preencher os campos).
+3. Ajuste os filtros e busque por parametros oficiais (REGION, SALES_INDUSTRY, JOB_TITLE, etc).
+4. Deduplicate e salve a lista em campanha.
+5. Enriqueca apenas o necessario antes de convidar.
+6. Envie convites com limite diario e intervalo entre envios.
+7. Monitore aceites e envie mensagens apenas para conexoes.
+8. Reavalie respostas e otimize o copy e o targeting.
+
+## Estrategia para identificar aceites e enviar mensagens
+Nao existe webhook de aceite. A forma mais confiavel e cruzar:
+- Pendentes: `/api/v1/users/invite/sent`
+- Conexoes: `/api/v1/users/relations`
+
+Regra pratica:
+- Aceitou = aparece em relations e nao aparece mais em invite/sent
+- Pendente = aparece em invite/sent
+- Desconhecido/ignorado = nao aparece em nenhum
+
+Recomendacao operacional:
+- Rodar uma sincronizacao 2-4x ao dia.
+- Persistir `invited_user_public_id` e/ou `invited_user_id` no lead.
+- Usar `public_identifier` ou `member_id` para o join.
+- Enviar mensagem automatica somente para leads marcados como aceitos.
+Nota: essa sincronizacao precisa ser implementada via job/worker; o app atual nao faz isso sozinho.
 
 ## Arquitetura
 - Frontend: Streamlit
@@ -123,8 +152,9 @@ streamlit run projeto_linkedin/app.py
 2. Faca login com seu usuario do Supabase Auth.
 3. Cadastre uma conta Unipile (Account ID, API Key, Label).
 4. Aba **Lista (Sales Navigator)**:
-   - Modo URL: cole a URL de busca do Sales Navigator.
-   - Modo Parametros: informe IDs (REGION, SALES_INDUSTRY, JOB_TITLE, etc).
+   - Cole a URL no expander "Extrair parametros da URL" e clique em "Extrair parametros".
+   - Revise os campos preenchidos e ajuste os filtros.
+   - Informe IDs (REGION, SALES_INDUSTRY, JOB_TITLE, etc).
    - Use o expander de parametros para listar IDs.
    - Use o botao de busca em lote para coletar mais paginas.
    - Baixe a lista ou salve como campanha.
@@ -187,7 +217,8 @@ python linkedin_salesnav_pagination.py
 
 ## Problemas comuns
 - **"Apenas perfis inacessiveis encontrados"**: confira o payload enviado na aba Payloads e valide os parametros.
-- **Sem cursor**: tente usar URL do Sales Navigator ou revise filtros.
+- **URL nao preencheu os campos**: valide se a URL e do Sales Navigator e se o campo `query` existe.
+- **Sem cursor**: revise filtros/conta.
 - **Mensagem nao enviada**: verifique se o attendee_id ou chat_id esta presente e se a conta tem permissao.
 - **Convite nao enviado**: confirme provider_id e limites do LinkedIn; mensagens de convite tem limite de 300 caracteres.
 

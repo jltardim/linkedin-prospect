@@ -3,7 +3,7 @@ import re
 import random
 import uuid
 from datetime import datetime, timedelta
-from urllib.parse import urlparse, parse_qs
+from urllib.parse import urlparse, parse_qs, unquote_plus
 import streamlit as st
 import pandas as pd
 import time
@@ -12,6 +12,20 @@ from db_handler import DBHandler
 
 # --- CONFIGURAÇÃO DA PÁGINA ---
 st.set_page_config(page_title="LinkedIn List Builder Pro", layout="wide", page_icon="🎯")
+
+SENIORITY_OPTIONS = [
+    "owner/partner",
+    "cxo",
+    "vice_president",
+    "director",
+    "experienced_manager",
+    "entry_level_manager",
+    "strategic",
+    "senior",
+    "entry_level",
+    "in_training",
+]
+NETWORK_OPTIONS = [1, 2, 3, "GROUP"]
 
 # --- FUNÇÕES AUXILIARES ---
 def init_session_state():
@@ -278,6 +292,295 @@ def criteria_from_search_url(search_url: str) -> dict:
     if keywords:
         criteria["keywords"] = keywords
     return criteria
+
+def decode_salesnav_value(value: str) -> str:
+    if not value:
+        return ""
+    decoded = unquote_plus(value)
+    if "%" in decoded:
+        decoded = unquote_plus(decoded)
+    return decoded
+
+def strip_wrapping_parens(value: str) -> str:
+    if not value:
+        return ""
+    value = value.strip()
+    if len(value) >= 2 and value[0] == "(" and value[-1] == ")":
+        return value[1:-1]
+    return value
+
+def split_top_level(text: str, delimiter: str = ",") -> list[str]:
+    if not text:
+        return []
+    parts = []
+    depth = 0
+    current = []
+    for ch in text:
+        if ch == "(":
+            depth += 1
+        elif ch == ")":
+            if depth > 0:
+                depth -= 1
+        if ch == delimiter and depth == 0:
+            part = "".join(current).strip()
+            if part:
+                parts.append(part)
+            current = []
+        else:
+            current.append(ch)
+    part = "".join(current).strip()
+    if part:
+        parts.append(part)
+    return parts
+
+def parse_top_level_pairs(text: str) -> dict[str, str]:
+    pairs: dict[str, str] = {}
+    for part in split_top_level(text):
+        if ":" not in part:
+            continue
+        key, value = part.split(":", 1)
+        pairs[key.strip()] = value.strip()
+    return pairs
+
+def extract_list_block(text: str, marker: str) -> str | None:
+    idx = text.find(marker)
+    if idx == -1:
+        return None
+    start = idx + len(marker)
+    if start >= len(text):
+        return None
+    depth = 1
+    for i in range(start, len(text)):
+        ch = text[i]
+        if ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth -= 1
+            if depth == 0:
+                return text[start:i]
+    return None
+
+def parse_salesnav_filters(filters_text: str) -> dict[str, dict[str, list[str]]]:
+    if not filters_text:
+        return {}
+    list_block = extract_list_block(filters_text, "List(")
+    if list_block is None:
+        return {}
+    items = split_top_level(list_block)
+    filters: dict[str, dict[str, list[str]]] = {}
+    for item in items:
+        item = strip_wrapping_parens(item)
+        if not item:
+            continue
+        pairs = parse_top_level_pairs(item)
+        filter_type = pairs.get("type")
+        values_text = pairs.get("values")
+        if not filter_type or not values_text:
+            continue
+        values_block = extract_list_block(values_text, "List(")
+        if values_block is None:
+            continue
+        value_items = split_top_level(values_block)
+        for value_item in value_items:
+            value_item = strip_wrapping_parens(value_item)
+            if not value_item:
+                continue
+            value_pairs = parse_top_level_pairs(value_item)
+            raw_value = value_pairs.get("id") or value_pairs.get("text")
+            if not raw_value:
+                continue
+            selection = (value_pairs.get("selectionType") or value_pairs.get("selection") or "INCLUDED").upper()
+            bucket = "exclude" if selection == "EXCLUDED" else "include"
+            decoded_value = decode_salesnav_value(raw_value)
+            if not decoded_value:
+                continue
+            entry = filters.setdefault(filter_type, {"include": [], "exclude": []})
+            if decoded_value not in entry[bucket]:
+                entry[bucket].append(decoded_value)
+    return filters
+
+def parse_salesnav_url(search_url: str) -> dict:
+    extracted = {
+        "keywords": "",
+        "saved_search_id": "",
+        "recent_search_id": "",
+        "filters": {},
+    }
+    if not search_url:
+        return extracted
+    try:
+        parsed = urlparse(search_url)
+    except Exception:
+        parsed = None
+    params = parse_qs(parsed.query) if parsed else {}
+    query_value = params.get("query", [""])[0] if params else ""
+    query_text = ""
+    if query_value:
+        query_text = unquote_plus(query_value)
+    elif search_url.strip().startswith("("):
+        query_text = search_url.strip()
+    else:
+        match = re.search(r"query=([^&]+)", search_url)
+        if match:
+            query_text = unquote_plus(match.group(1))
+    if not query_text:
+        return extracted
+    query_text = strip_wrapping_parens(query_text)
+    pairs = parse_top_level_pairs(query_text)
+    keywords_value = (
+        pairs.get("keywords")
+        or pairs.get("keyword")
+        or (params.get("keywords", [""])[0] if params else "")
+    )
+    if keywords_value:
+        extracted["keywords"] = decode_salesnav_value(keywords_value)
+    saved_search_value = (
+        pairs.get("savedSearchId")
+        or pairs.get("saved_search_id")
+        or (params.get("savedSearchId", [""])[0] if params else "")
+        or (params.get("saved_search_id", [""])[0] if params else "")
+    )
+    if saved_search_value:
+        extracted["saved_search_id"] = decode_salesnav_value(saved_search_value)
+    recent_search_value = (
+        pairs.get("recentSearchId")
+        or pairs.get("recent_search_id")
+        or (params.get("recentSearchId", [""])[0] if params else "")
+        or (params.get("recent_search_id", [""])[0] if params else "")
+    )
+    if recent_search_value:
+        extracted["recent_search_id"] = decode_salesnav_value(recent_search_value)
+    filters_value = pairs.get("filters")
+    if filters_value:
+        extracted["filters"] = parse_salesnav_filters(filters_value)
+    return extracted
+
+def dedupe_values(values: list[str]) -> list[str]:
+    seen = set()
+    ordered = []
+    for value in values:
+        if value in seen:
+            continue
+        seen.add(value)
+        ordered.append(value)
+    return ordered
+
+def map_seniority_values(values: list[str]) -> list[str]:
+    lookup = {re.sub(r"[^a-z0-9/]+", "_", opt.lower()).strip("_"): opt for opt in SENIORITY_OPTIONS}
+    lookup.update(
+        {
+            "owner": "owner/partner",
+            "partner": "owner/partner",
+            "owner_partner": "owner/partner",
+            "vp": "vice_president",
+            "vicepresident": "vice_president",
+            "vice_president": "vice_president",
+            "cxo": "cxo",
+            "c_level": "cxo",
+            "clevel": "cxo",
+            "entry_level": "entry_level",
+            "entrylevel": "entry_level",
+            "in_training": "in_training",
+            "training": "in_training",
+        }
+    )
+    mapped = []
+    for raw in values:
+        if not raw:
+            continue
+        norm = re.sub(r"[^a-z0-9/]+", "_", raw.lower()).strip("_")
+        option = lookup.get(norm)
+        if option and option not in mapped:
+            mapped.append(option)
+    return mapped
+
+def map_network_values(values: list[str]) -> list:
+    mapped = []
+    for raw in values:
+        if raw is None:
+            continue
+        text = str(raw).strip()
+        if not text:
+            continue
+        upper = text.upper()
+        if upper.endswith("+") and upper[:-1].isdigit():
+            upper = upper[:-1]
+        if upper.isdigit():
+            num = int(upper)
+            if num in (1, 2, 3) and num not in mapped:
+                mapped.append(num)
+            continue
+        if "GROUP" in upper or upper == "G":
+            if "GROUP" not in mapped:
+                mapped.append("GROUP")
+            continue
+        if "FIRST" in upper or upper in {"1ST", "1ST_DEGREE"}:
+            if 1 not in mapped:
+                mapped.append(1)
+        elif "SECOND" in upper or upper in {"2ND", "2ND_DEGREE"}:
+            if 2 not in mapped:
+                mapped.append(2)
+        elif "THIRD" in upper or upper in {"3RD", "3RD_DEGREE"}:
+            if 3 not in mapped:
+                mapped.append(3)
+    return mapped
+
+def build_salesnav_field_values(extracted: dict) -> dict:
+    filters = extracted.get("filters", {}) if isinstance(extracted, dict) else {}
+    def collect(filter_types: list[str]) -> list[str]:
+        values = []
+        for f_type in filter_types:
+            info = filters.get(f_type, {})
+            values.extend(info.get("include", []))
+        return dedupe_values(values)
+
+    region_ids = collect(["GEOGRAPHY", "REGION", "LOCATION"])
+    industry_ids = collect(["INDUSTRY", "SALES_INDUSTRY"])
+    company_vals = collect(["CURRENT_COMPANY", "COMPANY"])
+    role_vals = collect(["TITLE", "JOB_TITLE", "CURRENT_TITLE", "ROLE"])
+    function_ids = collect(["FUNCTION", "DEPARTMENT"])
+    seniority_vals = collect(["SENIORITY_LEVEL", "SENIORITY"])
+    network_vals = collect(["NETWORK_DISTANCE", "NETWORK"])
+
+    return {
+        "keywords": extracted.get("keywords") or "",
+        "region_ids": ", ".join(region_ids),
+        "industry_ids": ", ".join(industry_ids),
+        "company_vals": ", ".join(company_vals),
+        "role_vals": ", ".join(role_vals),
+        "function_ids": ", ".join(function_ids),
+        "seniority": map_seniority_values(seniority_vals),
+        "network": map_network_values(network_vals),
+        "saved_search_id": extracted.get("saved_search_id") or "",
+        "recent_search_id": extracted.get("recent_search_id") or "",
+    }
+
+def apply_salesnav_fields(fields: dict) -> int:
+    if not fields:
+        return 0
+    updates = {
+        "sn_keywords": fields.get("keywords") or "",
+        "sn_region_ids": fields.get("region_ids") or "",
+        "sn_industry_ids": fields.get("industry_ids") or "",
+        "sn_company_vals": fields.get("company_vals") or "",
+        "sn_role_vals": fields.get("role_vals") or "",
+        "sn_function_ids": fields.get("function_ids") or "",
+        "sn_saved_search_id": fields.get("saved_search_id") or "",
+    }
+    applied = 0
+    for key, value in updates.items():
+        if value:
+            st.session_state[key] = value
+            applied += 1
+    seniority_vals = fields.get("seniority") or []
+    if seniority_vals:
+        st.session_state["sn_seniority"] = [v for v in seniority_vals if v in SENIORITY_OPTIONS]
+        applied += 1
+    network_vals = fields.get("network") or []
+    if network_vals:
+        st.session_state["sn_network"] = [v for v in network_vals if v in NETWORK_OPTIONS]
+        applied += 1
+    return applied
 
 def parse_csv_list(value: str) -> list[str]:
     if not value:
@@ -687,12 +990,6 @@ tab1, tab2, tab3, tab4, tab5 = st.tabs(
 
 with tab1:
     st.header("🔎 Lista (Sales Navigator)")
-    sales_mode = st.radio(
-        "Modo de Busca",
-        ["URL do Sales Navigator", "Parametros"],
-        horizontal=True,
-        key="sales_search_mode",
-    )
     with st.expander("♻️ Retomar busca (checkpoint)", expanded=False):
         st.caption("Use um checkpoint para continuar no dia seguinte. O cursor pode expirar.")
         checkpoint_upload = st.file_uploader(
@@ -712,103 +1009,119 @@ with tab1:
                 except Exception as e:
                     st.error(f"Erro ao carregar checkpoint: {e}")
 
-    sales_url = None
-    criteria: dict = {}
-    if sales_mode == "URL do Sales Navigator":
-        st.info("Cole a URL completa do Sales Navigator para usar os filtros originais.")
+    with st.expander("Extrair parametros da URL (opcional)", expanded=False):
+        st.caption("Cole a URL do Sales Navigator para extrair filtros e preencher os campos abaixo.")
         sales_url = st.text_input(
             "URL de busca do Sales Navigator",
             placeholder="https://www.linkedin.com/sales/search/people?query=(keywords:rh)",
             key="sales_search_url",
         )
-    else:
-        st.info("Use IDs conforme o search.md. Separe multiplos IDs por virgula.")
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            keywords = st.text_input("Palavras-chave", key="sn_keywords")
-            location_ids = st.text_input("REGION IDs (include)", key="sn_region_ids")
-            industry_ids = st.text_input("SALES_INDUSTRY IDs (include)", key="sn_industry_ids")
-        with col2:
-            company_vals = st.text_input("Company (IDs ou nomes)", key="sn_company_vals")
-            role_vals = st.text_input("Job title (IDs ou texto)", key="sn_role_vals")
-            function_ids = st.text_input("Department IDs (include)", key="sn_function_ids")
-        with col3:
-            seniority_vals = st.multiselect(
-                "Seniority (include)",
-                [
-                    "owner/partner",
-                    "cxo",
-                    "vice_president",
-                    "director",
-                    "experienced_manager",
-                    "entry_level_manager",
-                    "strategic",
-                    "senior",
-                    "entry_level",
-                    "in_training",
-                ],
-                key="sn_seniority",
-            )
-            network_vals = st.multiselect(
-                "Network distance",
-                [1, 2, 3, "GROUP"],
-                key="sn_network",
-            )
-            saved_search_id = st.text_input(
-                "Saved search ID (opcional)",
-                help="Se informado, substitui todos os outros parametros.",
-                key="sn_saved_search_id",
-            )
+        if st.button("Extrair parametros", key="btn_parse_sales_url"):
+            extracted = parse_salesnav_url(sales_url)
+            fields = build_salesnav_field_values(extracted)
+            applied = apply_salesnav_fields(fields)
+            st.session_state["salesnav_extracted"] = {"raw": extracted, "fields": fields}
+            if applied:
+                st.success("Parametros extraidos. Revise os campos abaixo.")
+            else:
+                st.warning("Nao foi possivel extrair parametros dessa URL.")
+        extracted_state = st.session_state.get("salesnav_extracted")
+        if extracted_state:
+            fields = extracted_state.get("fields", {})
+            raw_filters = (extracted_state.get("raw") or {}).get("filters", {})
+            if fields or raw_filters:
+                summary = {
+                    "keywords": fields.get("keywords"),
+                    "region_ids": fields.get("region_ids"),
+                    "industry_ids": fields.get("industry_ids"),
+                    "company_vals": fields.get("company_vals"),
+                    "role_vals": fields.get("role_vals"),
+                    "function_ids": fields.get("function_ids"),
+                    "seniority": fields.get("seniority"),
+                    "network_distance": fields.get("network"),
+                    "saved_search_id": fields.get("saved_search_id"),
+                    "recent_search_id": fields.get("recent_search_id"),
+                    "filters": raw_filters,
+                }
+                st.code(json.dumps(summary, indent=2, ensure_ascii=False), language="json")
 
-        with st.expander("🔎 Buscar IDs de parametros (opcional)", expanded=False):
-            param_type = st.selectbox(
-                "Tipo de parametro",
-                [
-                    "REGION",
-                    "SALES_INDUSTRY",
-                    "COMPANY",
-                    "JOB_TITLE",
-                    "DEPARTMENT",
-                    "SCHOOL",
-                    "GROUPS",
-                    "PERSONA",
-                    "ACCOUNT_LISTS",
-                    "LEAD_LISTS",
-                    "POSTAL_CODE",
-                ],
-                key="param_type_select",
-            )
-            param_query = st.text_input("Busca por palavra-chave", key="param_query")
-            if st.button("Listar parametros", key="btn_list_params"):
-                try:
-                    log_request(
-                        "list_search_parameters",
-                        {
-                            "endpoint": "/api/v1/linkedin/search/parameters",
-                            "params": {
-                                "account_id": acc_id,
-                                "type": param_type,
-                                "service": "SALES_NAVIGATOR",
-                                "keywords": param_query,
-                            },
+    criteria: dict = {}
+    st.info("Use IDs conforme o search.md. Separe multiplos IDs por virgula.")
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        keywords = st.text_input("Palavras-chave", key="sn_keywords")
+        location_ids = st.text_input("REGION IDs (include)", key="sn_region_ids")
+        industry_ids = st.text_input("SALES_INDUSTRY IDs (include)", key="sn_industry_ids")
+    with col2:
+        company_vals = st.text_input("Company (IDs ou nomes)", key="sn_company_vals")
+        role_vals = st.text_input("Job title (IDs ou texto)", key="sn_role_vals")
+        function_ids = st.text_input("Department IDs (include)", key="sn_function_ids")
+    with col3:
+        seniority_vals = st.multiselect(
+            "Seniority (include)",
+            SENIORITY_OPTIONS,
+            key="sn_seniority",
+        )
+        network_vals = st.multiselect(
+            "Network distance",
+            NETWORK_OPTIONS,
+            key="sn_network",
+        )
+        saved_search_id = st.text_input(
+            "Saved search ID (opcional)",
+            help="Se informado, substitui todos os outros parametros.",
+            key="sn_saved_search_id",
+        )
+
+    with st.expander("🔎 Buscar IDs de parametros (opcional)", expanded=False):
+        param_type = st.selectbox(
+            "Tipo de parametro",
+            [
+                "REGION",
+                "SALES_INDUSTRY",
+                "COMPANY",
+                "JOB_TITLE",
+                "DEPARTMENT",
+                "SCHOOL",
+                "GROUPS",
+                "PERSONA",
+                "ACCOUNT_LISTS",
+                "LEAD_LISTS",
+                "POSTAL_CODE",
+            ],
+            key="param_type_select",
+        )
+        param_query = st.text_input("Busca por palavra-chave", key="param_query")
+        if st.button("Listar parametros", key="btn_list_params"):
+            try:
+                log_request(
+                    "list_search_parameters",
+                    {
+                        "endpoint": "/api/v1/linkedin/search/parameters",
+                        "params": {
+                            "account_id": acc_id,
+                            "type": param_type,
+                            "service": "SALES_NAVIGATOR",
+                            "keywords": param_query,
                         },
-                    )
-                    res_params = unipile.list_search_parameters(
-                        acc_id,
-                        parameter_type=param_type,
-                        service="SALES_NAVIGATOR",
-                        keywords=param_query,
-                        limit=50,
-                    )
-                    log_response("list_search_parameters", res_params, unipile.last_status)
-                    items = (res_params or {}).get("items", []) or []
-                    if items:
-                        st.json(items)
-                    else:
-                        st.info("Nenhum parametro encontrado.")
-                except Exception as e:
-                    log_error("list_search_parameters", e)
-                    st.error(f"Erro ao listar parametros: {e}")
+                    },
+                )
+                res_params = unipile.list_search_parameters(
+                    acc_id,
+                    parameter_type=param_type,
+                    service="SALES_NAVIGATOR",
+                    keywords=param_query,
+                    limit=50,
+                )
+                log_response("list_search_parameters", res_params, unipile.last_status)
+                items = (res_params or {}).get("items", []) or []
+                if items:
+                    st.json(items)
+                else:
+                    st.info("Nenhum parametro encontrado.")
+            except Exception as e:
+                log_error("list_search_parameters", e)
+                st.error(f"Erro ao listar parametros: {e}")
 
     sales_limit = st.radio("Resultados por página", [50, 100], horizontal=True, key="sales_page_limit")
 
@@ -816,86 +1129,60 @@ with tab1:
         reset_search()
         res = None
 
-        if sales_mode == "URL do Sales Navigator":
-            if not sales_url:
-                st.error("Cole a URL completa do Sales Navigator.")
-            else:
-                cleaned_url = strip_page_param(sales_url)
-                st.session_state['url_base'] = cleaned_url
-                st.session_state['url_page'] = get_page_param(cleaned_url)
-                st.session_state['search_params'] = {
-                    "mode": "url",
-                    "search_url": cleaned_url,
-                    "criteria": {},
-                    "api_type": "sales_navigator",
-                    "limit": sales_limit,
-                }
-                with st.spinner("Buscando..."):
-                    log_request(
-                        "search_from_url",
-                        {
-                            "endpoint": "/api/v1/linkedin/search",
-                            "params": {"account_id": acc_id, "limit": sales_limit},
-                            "body": {"url": cleaned_url},
-                        },
-                    )
-                    res = unipile.search_from_url(acc_id, cleaned_url, limit=sales_limit)
-                    log_response("search_from_url", res, unipile.last_status)
+        if saved_search_id:
+            criteria = {"saved_search_id": saved_search_id.strip()}
         else:
-            if saved_search_id:
-                criteria = {"saved_search_id": saved_search_id.strip()}
-            else:
-                if keywords:
-                    criteria["keywords"] = keywords
-                location_vals = build_include(parse_csv_list(location_ids))
-                if location_vals:
-                    criteria["location"] = location_vals
-                industry_vals = build_include(parse_csv_list(industry_ids))
-                if industry_vals:
-                    criteria["industry"] = industry_vals
-                company_vals_list = parse_csv_list(company_vals)
-                if company_vals_list:
-                    criteria["company"] = {"include": company_vals_list}
-                role_vals_list = parse_csv_list(role_vals)
-                if role_vals_list:
-                    criteria["role"] = {"include": role_vals_list}
-                function_vals = build_include(parse_csv_list(function_ids))
-                if function_vals:
-                    criteria["function"] = function_vals
-                if seniority_vals:
-                    criteria["seniority"] = {"include": seniority_vals}
-                if network_vals:
-                    criteria["network_distance"] = network_vals
+            if keywords:
+                criteria["keywords"] = keywords
+            location_vals = build_include(parse_csv_list(location_ids))
+            if location_vals:
+                criteria["location"] = location_vals
+            industry_vals = build_include(parse_csv_list(industry_ids))
+            if industry_vals:
+                criteria["industry"] = industry_vals
+            company_vals_list = parse_csv_list(company_vals)
+            if company_vals_list:
+                criteria["company"] = {"include": company_vals_list}
+            role_vals_list = parse_csv_list(role_vals)
+            if role_vals_list:
+                criteria["role"] = {"include": role_vals_list}
+            function_vals = build_include(parse_csv_list(function_ids))
+            if function_vals:
+                criteria["function"] = function_vals
+            if seniority_vals:
+                criteria["seniority"] = {"include": seniority_vals}
+            if network_vals:
+                criteria["network_distance"] = network_vals
 
-            if not criteria:
-                st.error("Preencha ao menos um parametro.")
-            else:
-                st.session_state['search_params'] = {
-                    "mode": "filters",
-                    "criteria": criteria,
-                    "api_type": "sales_navigator",
-                    "limit": sales_limit,
-                }
-                with st.spinner("Buscando..."):
-                    log_request(
-                        "search_people",
-                        {
-                            "endpoint": "/api/v1/linkedin/search",
-                            "params": {"account_id": acc_id, "limit": sales_limit},
-                            "body": {
-                                "api": "sales_navigator",
-                                "category": "people",
-                                **criteria,
-                            },
+        if not criteria:
+            st.error("Preencha ao menos um parametro.")
+        else:
+            st.session_state['search_params'] = {
+                "mode": "filters",
+                "criteria": criteria,
+                "api_type": "sales_navigator",
+                "limit": sales_limit,
+            }
+            with st.spinner("Buscando..."):
+                log_request(
+                    "search_people",
+                    {
+                        "endpoint": "/api/v1/linkedin/search",
+                        "params": {"account_id": acc_id, "limit": sales_limit},
+                        "body": {
+                            "api": "sales_navigator",
+                            "category": "people",
+                            **criteria,
                         },
-                    )
-                    res = unipile.search_people(
-                        acc_id,
-                        criteria,
-                        limit=sales_limit,
-                        api_type="sales_navigator",
-                    )
-                    log_response("search_people", res, unipile.last_status)
+                    },
+                )
+                res = unipile.search_people(
+                    acc_id,
+                    criteria,
+                    limit=sales_limit,
+                    api_type="sales_navigator",
+                )
+                log_response("search_people", res, unipile.last_status)
 
         handle_search_response(res, criteria)
 
@@ -911,81 +1198,35 @@ with tab1:
         c_btn, c_bulk, c_info = st.columns([1, 1.6, 3.4])
         with c_btn:
             p = st.session_state.get('search_params', {})
-            mode = p.get("mode", "filters")
             criteria = p.get("criteria", {})
             has_cursor = st.session_state.get('next_cursor') is not None
-            has_url_paging = bool(st.session_state.get('url_base'))
-            if has_cursor or has_url_paging:
+            if has_cursor:
                 if st.button(f"🔄 Buscar +{page_limit}", key="btn_more"):
                     with st.spinner("Carregando..."):
-                        if has_cursor:
-                            if mode == "url":
-                                log_request(
-                                    "search_from_url",
-                                    {
-                                        "endpoint": "/api/v1/linkedin/search",
-                                        "params": {
-                                            "account_id": acc_id,
-                                            "limit": page_limit,
-                                            "cursor": st.session_state['next_cursor'],
-                                        },
-                                        "body": {"url": p.get("search_url")},
-                                    },
-                                )
-                                res = unipile.search_from_url(
-                                    acc_id,
-                                    p.get("search_url"),
-                                    limit=page_limit,
-                                    cursor=st.session_state['next_cursor'],
-                                )
-                                log_response("search_from_url", res, unipile.last_status)
-                            else:
-                                log_request(
-                                    "search_people",
-                                    {
-                                        "endpoint": "/api/v1/linkedin/search",
-                                        "params": {
-                                            "account_id": acc_id,
-                                            "limit": page_limit,
-                                            "cursor": st.session_state['next_cursor'],
-                                        },
-                                        "body": {
-                                            "api": p.get("api_type", "sales_navigator"),
-                                            "category": "people",
-                                            **criteria,
-                                        },
-                                    },
-                                )
-                                res = unipile.search_people(
-                                    acc_id,
-                                    criteria,
-                                    limit=page_limit,
-                                    cursor=st.session_state['next_cursor'],
-                                    api_type=p.get("api_type", "classic"),
-                                )
-                                log_response("search_people", res, unipile.last_status)
-                        else:
-                            current_page = st.session_state.get('url_page') or 1
-                            next_page = current_page + 1
-                            next_url = set_page_param(st.session_state['url_base'], next_page)
-                            log_request(
-                                "search_from_url",
-                                {
-                                    "endpoint": "/api/v1/linkedin/search",
-                                    "params": {
-                                        "account_id": acc_id,
-                                        "limit": page_limit,
-                                    },
-                                    "body": {"url": next_url},
+                        log_request(
+                            "search_people",
+                            {
+                                "endpoint": "/api/v1/linkedin/search",
+                                "params": {
+                                    "account_id": acc_id,
+                                    "limit": page_limit,
+                                    "cursor": st.session_state['next_cursor'],
                                 },
-                            )
-                            res = unipile.search_from_url(
-                                acc_id,
-                                next_url,
-                                limit=page_limit,
-                            )
-                            log_response("search_from_url", res, unipile.last_status)
-                            st.session_state['url_page'] = next_page
+                                "body": {
+                                    "api": p.get("api_type", "sales_navigator"),
+                                    "category": "people",
+                                    **criteria,
+                                },
+                            },
+                        )
+                        res = unipile.search_people(
+                            acc_id,
+                            criteria,
+                            limit=page_limit,
+                            cursor=st.session_state['next_cursor'],
+                            api_type=p.get("api_type", "classic"),
+                        )
+                        log_response("search_people", res, unipile.last_status)
                         if res and 'items' in res:
                             valid = clean_results(res['items'], criteria)
                             valid, st.session_state['seen_lead_keys'] = dedupe_results(
@@ -1009,26 +1250,23 @@ with tab1:
                             total_count = paging.get('total_count')
                             if total_count is not None:
                                 st.session_state['total_count'] = total_count
-                            if has_cursor:
-                                new_cursor = res.get('cursor') or paging.get('cursor')
-                                if not new_cursor:
-                                    st.session_state['next_cursor'] = None
-                                elif new_cursor == st.session_state['last_cursor']:
-                                    st.warning("Cursor repetido: encerrando paginação.")
-                                    st.session_state['next_cursor'] = None
-                                else:
-                                    st.session_state['next_cursor'] = new_cursor
-                                    st.session_state['last_cursor'] = new_cursor
+                            new_cursor = res.get('cursor') or paging.get('cursor')
+                            if not new_cursor:
+                                st.session_state['next_cursor'] = None
+                            elif new_cursor == st.session_state['last_cursor']:
+                                st.warning("Cursor repetido: encerrando paginação.")
+                                st.session_state['next_cursor'] = None
+                            else:
+                                st.session_state['next_cursor'] = new_cursor
+                                st.session_state['last_cursor'] = new_cursor
                             if valid:
                                 st.rerun()
                         else:
                             st.session_state['next_cursor'] = None
         with c_bulk:
             p = st.session_state.get('search_params', {})
-            mode = p.get("mode", "filters")
             has_cursor = st.session_state.get('next_cursor') is not None
-            has_url_paging = bool(st.session_state.get('url_base'))
-            if has_cursor or has_url_paging:
+            if has_cursor:
                 current_count = len(st.session_state['search_results'])
                 total_count = st.session_state.get('total_count')
                 max_total = max(1000, total_count or 10000)
@@ -1074,112 +1312,42 @@ with tab1:
                     seen_cursors = set()
                     if st.session_state['last_cursor']:
                         seen_cursors.add(st.session_state['last_cursor'])
-                    no_new_pages = 0
-                    use_cursor = st.session_state.get('next_cursor') is not None
-                    url_base = st.session_state.get('url_base')
-                    max_pages = None
-                    if not use_cursor and url_base:
-                        items_per_page = None
-                        last_debug = st.session_state.get("last_search_debug") or {}
-                        try:
-                            items_per_page = int(last_debug.get("items_count") or 0)
-                        except (TypeError, ValueError):
-                            items_per_page = None
-                        items_per_page = items_per_page or page_limit
-                        if total_count:
-                            max_pages = (total_count + items_per_page - 1) // items_per_page + 2
-                        else:
-                            max_pages = 200
 
                     while True:
                         if target is not None and len(st.session_state['search_results']) >= target:
                             break
-                        if use_cursor:
-                            if not st.session_state['next_cursor']:
-                                break
-                            criteria = p.get("criteria", {})
-                            try:
-                                if mode == "url":
-                                    log_request(
-                                        "search_from_url",
-                                        {
-                                            "endpoint": "/api/v1/linkedin/search",
-                                            "params": {
-                                                "account_id": acc_id,
-                                                "limit": page_limit,
-                                                "cursor": st.session_state['next_cursor'],
-                                            },
-                                            "body": {"url": p.get("search_url")},
-                                        },
-                                    )
-                                    res = unipile.search_from_url(
-                                        acc_id,
-                                        p.get("search_url"),
-                                        limit=page_limit,
-                                        cursor=st.session_state['next_cursor'],
-                                    )
-                                    log_response("search_from_url", res, unipile.last_status)
-                                else:
-                                    log_request(
-                                        "search_people",
-                                        {
-                                            "endpoint": "/api/v1/linkedin/search",
-                                            "params": {
-                                                "account_id": acc_id,
-                                                "limit": page_limit,
-                                                "cursor": st.session_state['next_cursor'],
-                                            },
-                                            "body": {
-                                                "api": p.get("api_type", "sales_navigator"),
-                                                "category": "people",
-                                                **criteria,
-                                            },
-                                        },
-                                    )
-                                    res = unipile.search_people(
-                                        acc_id,
-                                        criteria,
-                                        limit=page_limit,
-                                        cursor=st.session_state['next_cursor'],
-                                        api_type=p.get("api_type", "classic"),
-                                    )
-                                    log_response("search_people", res, unipile.last_status)
-                            except Exception as e:
-                                log_error("bulk_cursor", e)
-                                st.error(f"Erro ao buscar pagina: {e}")
-                                break
-                        else:
-                            if not url_base:
-                                break
-                            current_page = st.session_state.get('url_page') or 1
-                            if max_pages and current_page >= max_pages:
-                                st.warning("Limite de paginas atingido.")
-                                break
-                            next_page = current_page + 1
-                            next_url = set_page_param(url_base, next_page)
-                            try:
-                                log_request(
-                                    "search_from_url",
-                                    {
-                                        "endpoint": "/api/v1/linkedin/search",
-                                        "params": {
-                                            "account_id": acc_id,
-                                            "limit": page_limit,
-                                        },
-                                        "body": {"url": next_url},
+                        if not st.session_state['next_cursor']:
+                            break
+                        criteria = p.get("criteria", {})
+                        try:
+                            log_request(
+                                "search_people",
+                                {
+                                    "endpoint": "/api/v1/linkedin/search",
+                                    "params": {
+                                        "account_id": acc_id,
+                                        "limit": page_limit,
+                                        "cursor": st.session_state['next_cursor'],
                                     },
-                                )
-                                res = unipile.search_from_url(
-                                    acc_id,
-                                    next_url,
-                                    limit=page_limit,
-                                )
-                                log_response("search_from_url", res, unipile.last_status)
-                            except Exception as e:
-                                log_error("bulk_page", e)
-                                st.error(f"Erro ao buscar pagina: {e}")
-                                break
-                            st.session_state['url_page'] = next_page
+                                    "body": {
+                                        "api": p.get("api_type", "sales_navigator"),
+                                        "category": "people",
+                                        **criteria,
+                                    },
+                                },
+                            )
+                            res = unipile.search_people(
+                                acc_id,
+                                criteria,
+                                limit=page_limit,
+                                cursor=st.session_state['next_cursor'],
+                                api_type=p.get("api_type", "classic"),
+                            )
+                            log_response("search_people", res, unipile.last_status)
+                        except Exception as e:
+                            log_error("bulk_cursor", e)
+                            st.error(f"Erro ao buscar pagina: {e}")
+                            break
 
                         if not res or 'items' not in res:
                             break
@@ -1206,32 +1374,20 @@ with tab1:
                         )
                         if valid:
                             st.session_state['search_results'].extend(valid)
-                            no_new_pages = 0
                         else:
-                            no_new_pages += 1
                             status.text("Sem novos resultados nesta pagina. Continuando...")
 
                         new_cursor = res.get('cursor') or paging.get('cursor')
-                        if use_cursor:
-                            if not new_cursor:
-                                st.session_state['next_cursor'] = None
-                                break
-                            if new_cursor in seen_cursors:
-                                st.warning("Cursor repetido: encerrando paginação.")
-                                st.session_state['next_cursor'] = None
-                                break
-                            st.session_state['next_cursor'] = new_cursor
-                            st.session_state['last_cursor'] = new_cursor
-                            seen_cursors.add(new_cursor)
-                        elif new_cursor:
-                            st.session_state['next_cursor'] = new_cursor
-                            st.session_state['last_cursor'] = new_cursor
-
-                        if not use_cursor and not res.get("items"):
+                        if not new_cursor:
+                            st.session_state['next_cursor'] = None
                             break
-                        if not use_cursor and no_new_pages >= 2:
-                            st.warning("Sem novos resultados em duas paginas seguidas.")
+                        if new_cursor in seen_cursors:
+                            st.warning("Cursor repetido: encerrando paginação.")
+                            st.session_state['next_cursor'] = None
                             break
+                        st.session_state['next_cursor'] = new_cursor
+                        st.session_state['last_cursor'] = new_cursor
+                        seen_cursors.add(new_cursor)
 
                         progress_total = target or st.session_state.get('total_count')
                         if progress_total:
@@ -1274,7 +1430,7 @@ with tab1:
             if total_count is not None:
                 st.caption(f"Total estimado pela API: {total_count}")
                 if st.session_state.get('next_cursor') is None and len(st.session_state['search_results']) < total_count:
-                    st.warning("A API nao retornou cursor para paginacao. Se estiver usando URL do Sales Navigator, o app tenta paginar via parametro page; caso contrario, revise filtros/conta.")
+                    st.warning("A API nao retornou cursor para paginacao. Revise filtros/conta.")
             debug = st.session_state.get("last_search_debug")
             if debug:
                 with st.expander("Debug da resposta (paging/config)", expanded=False):
