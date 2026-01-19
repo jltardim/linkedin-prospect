@@ -223,3 +223,25 @@ class UnipileClient:
         if user_email:
             payload["user_email"] = user_email
         return self._request("POST", endpoint, json_data=payload)
+
+    def list_invitations_sent(self, account_id: str, limit: int = 100, cursor: str | None = None):
+        endpoint = "/api/v1/users/invite/sent"
+        params = {
+            "account_id": account_id,
+            "limit": max(1, min(limit, 100)),
+        }
+        if cursor:
+            params["cursor"] = cursor
+        return self._request("GET", endpoint, params=params)
+
+    def list_relations(self, account_id: str, limit: int = 1000, cursor: str | None = None, filter_query: str | None = None):
+        endpoint = "/api/v1/users/relations"
+        params = {
+            "account_id": account_id,
+            "limit": max(1, min(limit, 1000)),
+        }
+        if cursor:
+            params["cursor"] = cursor
+        if filter_query:
+            params["filter"] = filter_query
+        return self._request("GET", endpoint, params=params)

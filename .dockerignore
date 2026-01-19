@@ -1,0 +1,14 @@
+__pycache__/
+*.py[cod]
+*.log
+.venv/
+venv/
+projeto_linkedin/venv/
+.git/
+.gitignore
+.streamlit/
+.env
+.env.*
+json-n8n*.json
+supabase/
+tests/

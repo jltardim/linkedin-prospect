@@ -39,6 +39,58 @@ Recomendacao operacional:
 - Enviar mensagem automatica somente para leads marcados como aceitos.
 Nota: essa sincronizacao precisa ser implementada via job/worker; o app atual nao faz isso sozinho.
 
+## Automacao (opcao 2: Edge Function + Worker)
+Nesta opcao, a Edge Function faz apenas a sincronizacao de aceites e o worker Python envia as mensagens.
+
+### 1) Edge Function (sync de aceites)
+Arquivo: `supabase/functions/sync-acceptances/index.ts`
+
+Requisitos:
+- `SUPABASE_URL`
+- `SUPABASE_SERVICE_ROLE_KEY`
+- `UNIPILE_BASE_URL` (opcional)
+
+Deploy (exemplo):
+```bash
+supabase functions deploy sync-acceptances
+```
+
+Execucao manual (exemplo):
+```bash
+curl -H "x-dry-run: true" "https://<project>.functions.supabase.co/sync-acceptances"
+```
+
+Parametros opcionais:
+- `account_db_id`: limita a uma conta Unipile
+- `dry_run=1`: apenas simula
+- `max_leads`: limita o numero de leads avaliados
+
+### 2) Worker Python (envio automatico)
+Arquivo: `projeto_linkedin/sync_acceptances.py`
+
+Requisitos:
+- `SUPABASE_URL`
+- `SUPABASE_SERVICE_KEY` (recomendado para bypass de RLS)
+
+Enviar mensagens apenas para leads aceitos (padrao):
+```bash
+SUPABASE_URL="..." SUPABASE_SERVICE_KEY="..." \
+python3 projeto_linkedin/sync_acceptances.py
+```
+
+Rodar sync via Python (fallback):
+```bash
+SUPABASE_URL="..." SUPABASE_SERVICE_KEY="..." \
+python3 projeto_linkedin/sync_acceptances.py --sync --no-send
+```
+
+Variaveis de envio:
+- `AUTO_MESSAGE_LIMIT` (default 50)
+- `AUTO_MESSAGE_DELAY_MIN` / `AUTO_MESSAGE_DELAY_MAX`
+- `AUTO_MESSAGE_LINKEDIN_API`
+- `AUTO_MESSAGE_INMAIL`
+- `AUTO_MESSAGE_SUBJECT`
+
 ## Arquitetura
 - Frontend: Streamlit
 - Backend/DB: Supabase (PostgreSQL + Auth + RLS)
@@ -141,6 +193,85 @@ create table message_logs (
   error_message text
 );
 ```
+
+## Modo BYO (cada usuario com seu Supabase)
+Este app funciona no modelo BYO: cada pessoa usa o proprio projeto Supabase.
+
+Passos resumidos:
+1. No app, baixe o arquivo `supabase_schema.sql` na barra lateral.
+2. Rode o SQL no SQL Editor do Supabase do usuario.
+3. No app, informe `Supabase URL` e `Supabase Key` do proprio projeto.
+4. Cadastre as credenciais da Unipile do usuario.
+
+### Worker (opcional)
+O worker de sincronizacao nao roda na stack compartilhada, pois depende da `SUPABASE_SERVICE_KEY` de cada usuario.
+Se quiser automatizar, cada usuario deve rodar o worker no proprio ambiente com as credenciais dele:
+```bash
+SUPABASE_URL="..." SUPABASE_SERVICE_KEY="..." \
+python3 projeto_linkedin/sync_acceptances.py --sync --send
+```
+
+#### Worker via Docker Compose
+Se preferir, o usuario pode subir o worker com Docker usando o arquivo `docker-compose.worker.yml`.
+
+Passo a passo:
+1. Garanta que o usuario tenha este repositorio na maquina (com o Dockerfile).
+2. (Recomendado) Copie o arquivo de exemplo e preencha as variaveis:
+```bash
+cp .env.worker.example .env.worker
+```
+3. Rode o comando abaixo no diretorio do projeto:
+```bash
+docker compose --env-file .env.worker -f docker-compose.worker.yml up -d --build
+```
+
+Variaveis opcionais:
+- `UNIPILE_BASE_URL`
+- `UNIPILE_ACCOUNT_DB_ID`
+- `AUTO_MESSAGE_LIMIT`
+- `AUTO_MESSAGE_DELAY_MIN`
+- `AUTO_MESSAGE_DELAY_MAX`
+- `AUTO_MESSAGE_LINKEDIN_API`
+- `AUTO_MESSAGE_INMAIL`
+- `AUTO_MESSAGE_SUBJECT`
+- `WORKER_INTERVAL_SECONDS` (padrao 21600 = 6h)
+
+Parar o worker:
+```bash
+docker compose -f docker-compose.worker.yml down
+```
+
+Atualizar o worker (rebuild):
+```bash
+docker compose -f docker-compose.worker.yml up -d --build
+```
+
+## Subir no Portainer (Traefik + BYO)
+Pre-requisitos:
+- Traefik rodando em modo Swarm com a rede `network_public`.
+- A imagem `linkedin-prospect:latest` precisa existir no servidor do Portainer.
+  - Se o Portainer roda neste servidor, rode: `docker build -t linkedin-prospect:latest .`
+  - Se usa outro servidor, faça o build la ou publique a imagem em um registry.
+
+Passo a passo (app):
+1. Abra o Portainer no navegador.
+2. Clique em **Stacks** -> **Add stack**.
+3. Nome: `linkedin-prospect`.
+4. Em **Web editor**, cole o conteudo do arquivo `docker-compose.yml`.
+5. Em **Environment variables**, adicione:
+   - `LINKEDIN_PROSPECT_HOST` = seu dominio (ex: `app.seudominio.com`)
+6. Clique em **Deploy the stack**.
+7. Acesse `https://seu-dominio` no navegador.
+
+Passo a passo (worker por usuario, opcional):
+1. **Stacks** -> **Add stack**.
+2. Nome: `linkedin-worker-cliente`.
+3. Em **Web editor**, cole o conteudo do arquivo `docker-compose.worker.yml`.
+4. Em **Environment variables**, preencha:
+   - `SUPABASE_URL`
+   - `SUPABASE_SERVICE_KEY`
+   - (Opcional) demais variaveis de automacao.
+5. Clique em **Deploy the stack**.
 
 ## Como rodar
 ```bash

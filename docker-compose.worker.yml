@@ -1,0 +1,22 @@
+version: "3.9"
+
+services:
+  linkedin-worker:
+    image: docker.io/jltardim/linkedin-prospect:1.0
+    command:
+      - "sh"
+      - "-c"
+      - "while true; do python projeto_linkedin/sync_acceptances.py --sync --send; sleep $${WORKER_INTERVAL_SECONDS}; done"
+    environment:
+      SUPABASE_URL: "${SUPABASE_URL}"
+      SUPABASE_SERVICE_KEY: "${SUPABASE_SERVICE_KEY}"
+      UNIPILE_BASE_URL: "${UNIPILE_BASE_URL:-https://api26.unipile.com:15609}"
+      UNIPILE_ACCOUNT_DB_ID: "${UNIPILE_ACCOUNT_DB_ID:-}"
+      AUTO_MESSAGE_LIMIT: "${AUTO_MESSAGE_LIMIT:-50}"
+      AUTO_MESSAGE_DELAY_MIN: "${AUTO_MESSAGE_DELAY_MIN:-1.0}"
+      AUTO_MESSAGE_DELAY_MAX: "${AUTO_MESSAGE_DELAY_MAX:-3.0}"
+      AUTO_MESSAGE_LINKEDIN_API: "${AUTO_MESSAGE_LINKEDIN_API:-sales_navigator}"
+      AUTO_MESSAGE_INMAIL: "${AUTO_MESSAGE_INMAIL:-false}"
+      AUTO_MESSAGE_SUBJECT: "${AUTO_MESSAGE_SUBJECT:-}"
+      WORKER_INTERVAL_SECONDS: "${WORKER_INTERVAL_SECONDS:-21600}"
+    restart: unless-stopped

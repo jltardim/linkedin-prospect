@@ -2,6 +2,7 @@ import json
 import re
 import random
 import uuid
+from pathlib import Path
 from datetime import datetime, timedelta
 from urllib.parse import urlparse, parse_qs, unquote_plus
 import streamlit as st
@@ -9,9 +10,12 @@ import pandas as pd
 import time
 from unipile_client import UnipileClient
 from db_handler import DBHandler
+from message_utils import build_message_context, render_message
 
 # --- CONFIGURAÇÃO DA PÁGINA ---
 st.set_page_config(page_title="LinkedIn List Builder Pro", layout="wide", page_icon="🎯")
+
+SQL_SCHEMA_PATH = Path(__file__).resolve().parent.parent / "supabase_schema.sql"
 
 SENIORITY_OPTIONS = [
     "owner/partner",
@@ -28,6 +32,12 @@ SENIORITY_OPTIONS = [
 NETWORK_OPTIONS = [1, 2, 3, "GROUP"]
 
 # --- FUNÇÕES AUXILIARES ---
+def load_schema_sql() -> str:
+    try:
+        return SQL_SCHEMA_PATH.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return ""
+
 def init_session_state():
     if 'search_results' not in st.session_state: st.session_state['search_results'] = []
     if 'next_cursor' not in st.session_state: st.session_state['next_cursor'] = None
@@ -836,66 +846,21 @@ def build_enrichment_payload(unipile: UnipileClient, account_id: str, lead: dict
     fields = extract_profile_fields(profile or {})
     return fields
 
-def first_name_from(value: str) -> str:
-    if not value:
-        return ""
-    parts = str(value).strip().split()
-    return parts[0] if parts else ""
-
-def build_message_context(lead: dict) -> dict:
-    full_name = lead.get("full_name") or lead.get("name") or ""
-    headline = lead.get("headline") or ""
-    profile_location = lead.get("profile_location") or ""
-    location = lead.get("location") or profile_location
-    current_title = lead.get("current_title") or ""
-    companies = lead.get("companies") or ""
-    if isinstance(companies, list):
-        companies = ", ".join([c for c in companies if c])
-    companies = companies or ""
-    company = ""
-    if isinstance(companies, str) and companies:
-        company = companies.split(",")[0].strip()
-
-    public_identifier = lead.get("linkedin_public_id") or lead.get("public_identifier") or ""
-    provider_id = lead.get("provider_id") or lead.get("id") or ""
-    profile_url = ""
-    if public_identifier:
-        profile_url = f"https://www.linkedin.com/in/{public_identifier}"
-
-    context = {
-        "first_name": first_name_from(full_name),
-        "full_name": full_name,
-        "headline": headline,
-        "location": location or "",
-        "profile_location": profile_location or "",
-        "current_title": current_title or "",
-        "companies": companies,
-        "company": company,
-        "company_id": lead.get("company_id") or "",
-        "bio": lead.get("bio") or "",
-        "public_identifier": public_identifier,
-        "provider_id": provider_id,
-        "profile_url": profile_url,
-    }
-    for key, value in lead.items():
-        if key not in context:
-            context[key] = value if value is not None else ""
-    return context
-
-class SafeFormatDict(dict):
-    def __missing__(self, key: str) -> str:
-        return ""
-
-def render_message(template: str, lead: dict) -> str:
-    context = build_message_context(lead)
-    try:
-        return template.format_map(SafeFormatDict(context))
-    except Exception:
-        return template
-
 # --- SIDEBAR (CONFIG & LOGIN) ---
 with st.sidebar:
     st.title("⚙️ Configurações")
+    with st.expander("Supabase SQL", expanded=False):
+        st.caption("Baixe o SQL para criar as tabelas no seu projeto Supabase.")
+        schema_sql = load_schema_sql()
+        if schema_sql:
+            st.download_button(
+                "Baixar SQL",
+                data=schema_sql,
+                file_name="supabase_schema.sql",
+                mime="text/sql",
+            )
+        else:
+            st.info("Arquivo supabase_schema.sql nao encontrado.")
     sb_url = st.text_input("Supabase URL", type="password", key="sb_url_input")
     sb_key = st.text_input("Supabase Key", type="password", key="sb_key_input")
     
