@@ -1,0 +1,82 @@
+version: "3.8"
+
+# Docker Compose para o Cron de Convites
+# Executa automaticamente às 07:00 horário de São Paulo (America/Sao_Paulo)
+#
+# Uso:
+#   docker-compose -f docker-compose.cron.yml up -d
+#
+# Para testar manualmente:
+#   docker-compose -f docker-compose.cron.yml run --rm invite-cron python projeto_linkedin/cron_invites.py
+
+services:
+  invite-cron:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: linkedin-prospect-cron
+    restart: unless-stopped
+    environment:
+      - TZ=America/Sao_Paulo
+      - SUPABASE_URL=${SUPABASE_URL}
+      - SUPABASE_KEY=${SUPABASE_KEY}
+      - SUPABASE_SERVICE_KEY=${SUPABASE_SERVICE_KEY}
+      - INVITE_DAILY_LIMIT=${INVITE_DAILY_LIMIT:-100}
+      - INVITE_WEEKLY_LIMIT=${INVITE_WEEKLY_LIMIT:-190}
+      - INVITE_DELAY_MIN=${INVITE_DELAY_MIN:-1.0}
+      - INVITE_DELAY_MAX=${INVITE_DELAY_MAX:-3.0}
+      - UNIPILE_BASE_URL=${UNIPILE_BASE_URL:-https://api26.unipile.com:15609}
+    volumes:
+      - ./logs:/app/logs
+    # Usa supercronic para scheduling (mais leve que cron tradicional)
+    # Sintaxe: minuto hora dia mês dia_semana comando
+    # 0 7 * * * = todos os dias às 07:00
+    entrypoint: >
+      sh -c "
+        echo 'Cron de convites configurado para 07:00 (America/Sao_Paulo)'
+        echo 'Aguardando próxima execução...'
+        
+        # Loop que verifica a hora e executa às 07:00
+        while true; do
+          HOUR=\$$(date +%H)
+          MINUTE=\$$(date +%M)
+          
+          if [ \"\$$HOUR\" = \"07\" ] && [ \"\$$MINUTE\" = \"00\" ]; then
+            echo '=========================================='
+            echo 'Executando cron de convites...'
+            echo '=========================================='
+            python projeto_linkedin/cron_invites.py
+            # Aguarda 61 segundos para evitar execução dupla
+            sleep 61
+          fi
+          
+          # Verifica a cada 30 segundos
+          sleep 30
+        done
+      "
+    healthcheck:
+      test: [ "CMD", "python", "-c", "import os; os.getenv('SUPABASE_URL') or exit(1)" ]
+      interval: 5m
+      timeout: 10s
+      retries: 3
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+  # Serviço alternativo usando supercronic (mais robusto)
+  # Descomente se preferir usar supercronic ao invés do loop shell
+  # invite-cron-supercronic:
+  #   build:
+  #     context: .
+  #     dockerfile: Dockerfile.cron
+  #   container_name: linkedin-prospect-cron
+  #   restart: unless-stopped
+  #   environment:
+  #     - TZ=America/Sao_Paulo
+  #     - SUPABASE_URL=${SUPABASE_URL}
+  #     - SUPABASE_SERVICE_KEY=${SUPABASE_SERVICE_KEY}
+  #     - INVITE_DAILY_LIMIT=${INVITE_DAILY_LIMIT:-100}
+  #   volumes:
+  #     - ./crontab:/etc/crontab:ro
+  #     - ./logs:/app/logs
