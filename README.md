@@ -1,16 +1,62 @@
 # LinkedIn Prospect SDR Tool
 
-Aplicacao para prospeccao no LinkedIn usando Unipile, Supabase e Streamlit. O fluxo principal e: criar uma lista via Sales Navigator, salvar, enriquecer, convidar e enviar mensagens.
+Aplicação para **prospecção no LinkedIn** utilizando **Unipile**, **Supabase** e **Streamlit**.
+O fluxo principal do sistema é: **criar listas via Sales Navigator → salvar → enriquecer → convidar → enviar mensagens → monitorar aceites**.
 
-## O que este app faz
-- Busca pessoas no Sales Navigator por parametros com IDs oficiais.
-- Extrai parametros de uma URL do Sales Navigator para preencher os campos de busca.
-- Pagina resultados com cursor e permite buscar em lote.
-- Salva listas em campanhas, com deduplicacao.
-- Enriquecimento leve (Bio, Cargo, Empresas, Empresa ID, Localizacao, Emails, Phones, Adresses, Socials).
-- Envio de convites com agendamento e limite diario.
-- Envio de mensagens por novo chat (attendee_id) ou chat existente (chat_id).
-- Aba de payloads para auditar request/response.
+Este projeto foi desenhado para **evitar scraping direto**, respeitar limites operacionais e permitir **automação controlada e auditável**.
+
+---
+
+## 🎯 O que este app faz
+
+* Busca pessoas no **LinkedIn Sales Navigator** usando **parâmetros oficiais (IDs)**
+* Extrai parâmetros diretamente de uma **URL do Sales Navigator**
+* Pagina resultados com **cursor**, permitindo buscas em lote
+* Salva leads em **campanhas**, com **deduplicação**
+* Realiza **enriquecimento leve** (bio, cargo, empresa, localização, contatos)
+* Envia **convites com agendamento** e limite diário
+* Envia **mensagens automáticas** (novo chat ou chat existente)
+* Mantém **auditoria completa** de payloads (request/response)
+
+---
+
+## 🧠 Decisões Técnicas (e por quê)
+
+### 🐍 Por que Python?
+
+* Linguagem altamente produtiva para **automação e integrações**
+* Ecossistema maduro para APIs, jobs e scripts
+* Fácil manutenção e leitura
+* Excelente integração com Supabase, Unipile e Streamlit
+
+---
+
+### 🖥️ Por que Streamlit?
+
+* Permite criar **interfaces funcionais rapidamente**
+* Ideal para ferramentas internas e SDR tools
+* Reduz custo de frontend tradicional
+* Facilita debug e auditoria visual de payloads
+
+---
+
+### 🔌 Por que Unipile?
+
+* Evita scraping direto do LinkedIn
+* API estável e documentada
+* Suporte oficial a **Sales Navigator**
+* Menor risco de bloqueio de conta
+
+---
+
+### 🗄️ Por que Supabase?
+
+* PostgreSQL robusto
+* Auth + RLS nativo
+* SQL versionável
+* Ideal para modelo **BYO (Bring Your Own Supabase)**
+
+Essa escolha permite que **cada usuário tenha seu próprio banco**, aumentando segurança e escalabilidade.
 
 ## Estrategia completa de prospeccao (recomendada)
 1. Defina o ICP e filtros do Sales Navigator.
